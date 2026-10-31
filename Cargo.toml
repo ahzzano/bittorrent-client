@@ -4,3 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+eframe = { version = "0.37.0", optional = true }
+reqwest = "0.13.5"
+sha1 = "0.11.0"
+tokio = { version = "1.54.1", features = ["full"] }
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe"]
+
+[[bin]]
+name = "bt"
+path = "src/cli.rs"
+
+[[bin]]
+name = "bt-gui"
+path = "src/gui.rs"
+required-features = ["gui"]
