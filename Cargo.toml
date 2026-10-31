@@ -4,4 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-egui = "0.37.0"
+eframe = { version = "0.37.0", optional = true }
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe"]
+
+[[bin]]
+name = "bt"
+path = "src/cli.rs"
+
+[[bin]]
+name = "bt-gui"
+path = "src/gui.rs"
+required-features = ["gui"]
