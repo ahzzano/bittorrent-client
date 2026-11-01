@@ -1,9 +1,13 @@
 use crate::bencode::ParserError::{EndOfInput, UnexpectedByte};
-use crate::bencode::Value::Int;
+use crate::bencode::Value::{Int, List};
 
+const MAX_DEPTH: usize = 64;
+
+#[derive(Debug, PartialEq)]
 pub enum Value {
     Int(i64),
     Bytes(Vec<u8>),
+    List(Vec<Value>),
 }
 
 #[non_exhaustive]
@@ -11,16 +15,22 @@ pub enum Value {
 pub enum ParserError {
     UnexpectedByte,
     EndOfInput,
+    DepthError,
 }
 
 pub struct Parser<'a> {
     buf: &'a [u8],
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0 }
+        Self {
+            buf,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     // Use this when peeking. Avoid using direct look ups
@@ -43,11 +53,35 @@ impl<'a> Parser<'a> {
         if let Ok(byte) = self.peek() {
             return match byte {
                 b'i' => self.parse_int(),
+                b'l' => self.parse_list(),
                 _ if byte.is_ascii_digit() => self.parse_string(),
                 _ => Err(UnexpectedByte),
             };
         }
         Err(EndOfInput)
+    }
+
+    fn parse_list_items(&mut self) -> Result<Vec<Value>, ParserError> {
+        let mut items: Vec<Value> = Vec::new();
+        loop {
+            if self.peek()? == b'e' {
+                self.pos += 1;
+                return Ok(items);
+            }
+            items.push(self.parse()?);
+        }
+    }
+
+    fn parse_list(&mut self) -> Result<Value, ParserError> {
+        if self.depth >= MAX_DEPTH {
+            return Err(ParserError::DepthError);
+        }
+        self.depth += 1;
+        self.pos += 1;
+        let result = self.parse_list_items();
+
+        self.depth -= 1;
+        result.map(List)
     }
 
     fn parse_string(&mut self) -> Result<Value, ParserError> {
@@ -261,5 +295,120 @@ mod tests {
         assert!(matches!(parser.parse(), Ok(Int(42))));
         assert!(matches!(parser.parse(), Ok(Value::Bytes(b)) if b.is_empty()));
         assert!(matches!(parser.parse(), Err(EndOfInput)));
+    }
+
+    fn nested(depth: usize) -> Vec<u8> {
+        ["l".repeat(depth), "e".repeat(depth)].concat().into_bytes()
+    }
+
+    #[test]
+    fn parses_empty_list() {
+        assert!(matches!(parse(b"le"), Ok(List(items)) if items.is_empty()));
+    }
+
+    #[test]
+    fn parses_mixed_list() {
+        let result = parse(b"li1e4:spami-3ee");
+        assert!(matches!(
+            result.as_ref().map(|v| match v {
+                List(items) => items.as_slice(),
+                _ => &[],
+            }),
+            Ok([Int(1), Value::Bytes(b), Int(-3)]) if b == b"spam"
+        ));
+    }
+
+    #[test]
+    fn parses_nested_list() {
+        let result = parse(b"lli1eee");
+        let Ok(List(outer)) = result else {
+            panic!("expected list");
+        };
+        assert!(matches!(outer.as_slice(), [List(inner)] if matches!(inner.as_slice(), [Int(1)])));
+    }
+
+    #[test]
+    fn parses_list_of_lists() {
+        let Ok(List(outer)) = parse(b"ll4:spamel3:eggee") else {
+            panic!("expected list");
+        };
+        assert_eq!(outer.len(), 2);
+        assert!(
+            outer
+                .iter()
+                .all(|v| matches!(v, List(inner) if inner.len() == 1))
+        );
+    }
+
+    #[test]
+    fn parses_long_flat_list() {
+        let input = format!("l{}e", "i1e".repeat(MAX_DEPTH * 2));
+        assert!(matches!(parse(input.as_bytes()), Ok(List(items)) if items.len() == MAX_DEPTH * 2));
+    }
+
+    #[test]
+    fn parses_many_sibling_lists() {
+        let input = format!("l{}e", "le".repeat(MAX_DEPTH * 2));
+        assert!(matches!(parse(input.as_bytes()), Ok(List(items)) if items.len() == MAX_DEPTH * 2));
+    }
+
+    #[test]
+    fn parses_consecutive_lists() {
+        let input = "li1ee".repeat(MAX_DEPTH * 2);
+        let mut parser = Parser::new(input.as_bytes());
+        for _ in 0..MAX_DEPTH * 2 {
+            assert!(matches!(parser.parse(), Ok(List(_))));
+        }
+        assert!(matches!(parser.parse(), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn parses_list_at_max_depth() {
+        assert!(parse(&nested(MAX_DEPTH)).is_ok());
+    }
+
+    #[test]
+    fn rejects_list_past_max_depth() {
+        assert!(matches!(
+            parse(&nested(MAX_DEPTH + 1)),
+            Err(ParserError::DepthError)
+        ));
+    }
+
+    #[test]
+    fn rejects_nesting_bomb() {
+        let input = "l".repeat(100_000);
+        assert!(matches!(
+            parse(input.as_bytes()),
+            Err(ParserError::DepthError)
+        ));
+    }
+
+    #[test]
+    fn rejects_unterminated_list() {
+        assert!(matches!(parse(b"li1e"), Err(EndOfInput)));
+        assert!(matches!(parse(b"l"), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn rejects_invalid_list_item() {
+        assert!(matches!(parse(b"lxe"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_stray_end() {
+        assert!(matches!(parse(b"e"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn restores_depth_after_error() {
+        let mut parser = Parser::new(b"llxee");
+        assert!(parser.parse().is_err());
+        assert_eq!(parser.depth, 0);
+
+        let bomb = nested(MAX_DEPTH + 1);
+        let mut parser = Parser::new(&bomb);
+        assert!(matches!(parser.parse(), Err(ParserError::DepthError)));
+        assert_eq!(parser.depth, 0);
     }
 }
