@@ -66,7 +66,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if (digits.starts_with(b"0") && digits.len() > 1) {
+        if digits.starts_with(b"0") && digits.len() > 1 {
             return Err(UnexpectedByte);
         }
 
