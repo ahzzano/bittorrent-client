@@ -33,13 +33,52 @@ impl<'a> Parser<'a> {
             .ok_or(ParserError::EndOfInput)
     }
 
+    fn take(&mut self, len: usize) -> Result<&'a [u8], ParserError> {
+        let end = self.pos.checked_add(len).ok_or(EndOfInput)?;
+        let bytes = self.buf.get(self.pos..end).ok_or(EndOfInput)?;
+        self.pos = end;
+
+        Ok(bytes)
+    }
+
     pub fn parse(&mut self) -> Result<Value, ParserError> {
         if let Ok(byte) = self.peek() {
             return match byte {
                 b'i' => self.parse_int(),
+                _ if byte.is_ascii_digit() => self.parse_string(),
                 _ => Err(UnexpectedByte),
             };
         }
+        Err(EndOfInput)
+    }
+
+    fn parse_string(&mut self) -> Result<Value, ParserError> {
+        let mut digits: Vec<u8> = Vec::new();
+
+        loop {
+            let byte = self.peek()?;
+            self.pos += 1;
+
+            match byte {
+                b':' => break,
+                _ if byte.is_ascii_digit() => digits.push(byte),
+                _ => return Err(UnexpectedByte),
+            }
+        }
+
+        if digits.starts_with(b"0") && digits.len() > 1 {
+            return Err(UnexpectedByte);
+        }
+
+        let strlen: usize = str::from_utf8(&digits)
+            .map_err(|_| UnexpectedByte)?
+            .parse()
+            .map_err(|_| UnexpectedByte)?;
+
+        if let Ok(bytes) = self.take(strlen) {
+            return Ok(Value::Bytes(bytes.to_vec()));
+        }
+
         Err(EndOfInput)
     }
 
@@ -169,6 +208,60 @@ mod tests {
         let mut parser = Parser::new(b"i1ei2e");
         assert!(matches!(parser.parse(), Ok(Int(1))));
         assert!(matches!(parser.parse(), Ok(Int(2))));
+        assert!(matches!(parser.parse(), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn parses_string() {
+        assert!(matches!(parse(b"4:spam"), Ok(Value::Bytes(b)) if b == b"spam"));
+    }
+
+    #[test]
+    fn parses_multi_digit_length() {
+        assert!(matches!(parse(b"11:hello world"), Ok(Value::Bytes(b)) if b == b"hello world"));
+    }
+
+    #[test]
+    fn parses_empty_string() {
+        assert!(matches!(parse(b"0:"), Ok(Value::Bytes(b)) if b.is_empty()));
+    }
+
+    #[test]
+    fn parses_binary_string() {
+        assert!(matches!(parse(b"3:\xff\x00\x80"), Ok(Value::Bytes(b)) if b == [0xff, 0x00, 0x80]));
+    }
+
+    #[test]
+    fn rejects_short_string() {
+        assert!(matches!(parse(b"5:spam"), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn rejects_missing_colon() {
+        assert!(matches!(parse(b"4"), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn rejects_non_digit_length() {
+        assert!(matches!(parse(b"4x:spam"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_string_leading_zero() {
+        assert!(parse(b"03:abc").is_err());
+    }
+
+    #[test]
+    fn rejects_huge_length() {
+        assert!(parse(b"18446744073709551615:x").is_err());
+    }
+
+    #[test]
+    fn parses_consecutive_values() {
+        let mut parser = Parser::new(b"4:spami42e0:");
+        assert!(matches!(parser.parse(), Ok(Value::Bytes(b)) if b == b"spam"));
+        assert!(matches!(parser.parse(), Ok(Int(42))));
+        assert!(matches!(parser.parse(), Ok(Value::Bytes(b)) if b.is_empty()));
         assert!(matches!(parser.parse(), Err(EndOfInput)));
     }
 }
