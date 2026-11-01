@@ -33,13 +33,52 @@ impl<'a> Parser<'a> {
             .ok_or(ParserError::EndOfInput)
     }
 
+    fn take(&mut self, len: usize) -> Result<&'a [u8], ParserError> {
+        let end = self.pos.checked_add(len).ok_or(EndOfInput)?;
+        let bytes = self.buf.get(self.pos..end).ok_or(EndOfInput)?;
+        self.pos = end;
+
+        Ok(bytes)
+    }
+
     pub fn parse(&mut self) -> Result<Value, ParserError> {
         if let Ok(byte) = self.peek() {
             return match byte {
                 b'i' => self.parse_int(),
+                _ if byte.is_ascii_digit() => self.parse_string(),
                 _ => Err(UnexpectedByte),
             };
         }
+        Err(EndOfInput)
+    }
+
+    fn parse_string(&mut self) -> Result<Value, ParserError> {
+        let mut digits: Vec<u8> = Vec::new();
+
+        loop {
+            let byte = self.peek()?;
+            self.pos += 1;
+
+            match byte {
+                b':' => break,
+                _ if byte.is_ascii_digit() => digits.push(byte),
+                _ => return Err(UnexpectedByte),
+            }
+        }
+
+        if (digits.starts_with(b"0") && digits.len() > 1) {
+            return Err(UnexpectedByte);
+        }
+
+        let strlen: usize = str::from_utf8(&digits)
+            .map_err(|_| UnexpectedByte)?
+            .parse()
+            .map_err(|_| UnexpectedByte)?;
+
+        if let Ok(bytes) = self.take(strlen) {
+            return Ok(Value::Bytes(bytes.to_vec()));
+        }
+
         Err(EndOfInput)
     }
 
