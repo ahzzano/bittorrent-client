@@ -77,3 +77,91 @@ impl<'a> Parser<'a> {
         Ok(Int(num))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(input: &[u8]) -> Result<Value, ParserError> {
+        Parser::new(input).parse()
+    }
+
+    #[test]
+    fn parses_positive_int() {
+        assert!(matches!(parse(b"i42e"), Ok(Int(42))));
+    }
+
+    #[test]
+    fn parses_zero() {
+        assert!(matches!(parse(b"i0e"), Ok(Int(0))));
+    }
+
+    #[test]
+    fn parses_negative_int() {
+        assert!(matches!(parse(b"i-3e"), Ok(Int(-3))));
+    }
+
+    #[test]
+    fn parses_i64_bounds() {
+        assert!(matches!(parse(b"i9223372036854775807e"), Ok(Int(i64::MAX))));
+        assert!(matches!(
+            parse(b"i-9223372036854775808e"),
+            Ok(Int(i64::MIN))
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_input() {
+        assert!(matches!(parse(b""), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn rejects_unknown_prefix() {
+        assert!(matches!(parse(b"x"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_non_digit() {
+        assert!(matches!(parse(b"i4a2e"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_double_minus() {
+        assert!(matches!(parse(b"i--3e"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_minus_after_digits() {
+        assert!(matches!(parse(b"i3-e"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_unterminated_int() {
+        assert!(parse(b"i42").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_int() {
+        assert!(parse(b"ie").is_err());
+    }
+
+    #[test]
+    fn rejects_lone_minus() {
+        assert!(parse(b"i-e").is_err());
+    }
+
+    #[test]
+    fn rejects_negative_zero() {
+        assert!(parse(b"i-0e").is_err());
+    }
+
+    #[test]
+    fn rejects_leading_zero() {
+        assert!(parse(b"i03e").is_err());
+    }
+
+    #[test]
+    fn rejects_overflow() {
+        assert!(parse(b"i9223372036854775808e").is_err());
+    }
+}
