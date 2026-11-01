@@ -1,10 +1,13 @@
 use crate::bencode::ParserError::{EndOfInput, UnexpectedByte};
-use crate::bencode::Value::Int;
+use crate::bencode::Value::{Int, List};
+
+const MAX_DEPTH: usize = 64;
 
 #[derive(Debug, PartialEq)]
 pub enum Value {
     Int(i64),
     Bytes(Vec<u8>),
+    List(Vec<Value>),
 }
 
 #[non_exhaustive]
@@ -12,16 +15,22 @@ pub enum Value {
 pub enum ParserError {
     UnexpectedByte,
     EndOfInput,
+    DepthError,
 }
 
 pub struct Parser<'a> {
     buf: &'a [u8],
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0 }
+        Self {
+            buf,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     // Use this when peeking. Avoid using direct look ups
@@ -44,11 +53,35 @@ impl<'a> Parser<'a> {
         if let Ok(byte) = self.peek() {
             return match byte {
                 b'i' => self.parse_int(),
+                b'l' => self.parse_list(),
                 _ if byte.is_ascii_digit() => self.parse_string(),
                 _ => Err(UnexpectedByte),
             };
         }
         Err(EndOfInput)
+    }
+
+    fn parse_list_items(&mut self) -> Result<Vec<Value>, ParserError> {
+        let mut items: Vec<Value> = Vec::new();
+        loop {
+            if self.peek()? == b'e' {
+                self.pos += 1;
+                return Ok(items);
+            }
+            items.push(self.parse()?);
+        }
+    }
+
+    fn parse_list(&mut self) -> Result<Value, ParserError> {
+        if self.depth >= MAX_DEPTH {
+            return Err(ParserError::DepthError);
+        }
+        self.depth += 1;
+        self.pos += 1;
+        let result = self.parse_list_items();
+
+        self.depth -= 1;
+        result.map(List)
     }
 
     fn parse_string(&mut self) -> Result<Value, ParserError> {
