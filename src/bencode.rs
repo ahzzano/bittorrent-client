@@ -48,22 +48,18 @@ impl<'a> Parser<'a> {
 
         loop {
             self.pos += 1;
-            let char = self.peek();
+            let byte = self.peek()?;
 
-            if let Ok(byte) = char {
-                match byte {
-                    b'e' => {
-                        self.pos += 1;
-                        break;
-                    }
-                    b'-' if digits.is_empty() => digits.push(byte),
-                    b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' => {
-                        digits.push(byte)
-                    }
-                    _ => return Err(UnexpectedByte),
+            match byte {
+                b'e' => {
+                    self.pos += 1;
+                    break;
                 }
-            } else {
-                return Err(UnexpectedByte);
+                b'-' if digits.is_empty() => digits.push(byte),
+                b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' => {
+                    digits.push(byte)
+                }
+                _ => return Err(UnexpectedByte),
             }
         }
 
@@ -140,7 +136,7 @@ mod tests {
 
     #[test]
     fn rejects_unterminated_int() {
-        assert!(parse(b"i42").is_err());
+        assert!(matches!(parse(b"i42"), Err(EndOfInput)));
     }
 
     #[test]
