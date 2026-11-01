@@ -210,4 +210,58 @@ mod tests {
         assert!(matches!(parser.parse(), Ok(Int(2))));
         assert!(matches!(parser.parse(), Err(EndOfInput)));
     }
+
+    #[test]
+    fn parses_string() {
+        assert!(matches!(parse(b"4:spam"), Ok(Value::Bytes(b)) if b == b"spam"));
+    }
+
+    #[test]
+    fn parses_multi_digit_length() {
+        assert!(matches!(parse(b"11:hello world"), Ok(Value::Bytes(b)) if b == b"hello world"));
+    }
+
+    #[test]
+    fn parses_empty_string() {
+        assert!(matches!(parse(b"0:"), Ok(Value::Bytes(b)) if b.is_empty()));
+    }
+
+    #[test]
+    fn parses_binary_string() {
+        assert!(matches!(parse(b"3:\xff\x00\x80"), Ok(Value::Bytes(b)) if b == [0xff, 0x00, 0x80]));
+    }
+
+    #[test]
+    fn rejects_short_string() {
+        assert!(matches!(parse(b"5:spam"), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn rejects_missing_colon() {
+        assert!(matches!(parse(b"4"), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn rejects_non_digit_length() {
+        assert!(matches!(parse(b"4x:spam"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_string_leading_zero() {
+        assert!(parse(b"03:abc").is_err());
+    }
+
+    #[test]
+    fn rejects_huge_length() {
+        assert!(parse(b"18446744073709551615:x").is_err());
+    }
+
+    #[test]
+    fn parses_consecutive_values() {
+        let mut parser = Parser::new(b"4:spami42e0:");
+        assert!(matches!(parser.parse(), Ok(Value::Bytes(b)) if b == b"spam"));
+        assert!(matches!(parser.parse(), Ok(Int(42))));
+        assert!(matches!(parser.parse(), Ok(Value::Bytes(b)) if b.is_empty()));
+        assert!(matches!(parser.parse(), Err(EndOfInput)));
+    }
 }
