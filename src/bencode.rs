@@ -57,6 +57,7 @@ impl<'a> Parser<'a> {
             return match byte {
                 b'i' => self.parse_int(),
                 b'l' => self.parse_list(),
+                b'd' => self.parse_dict(),
                 _ if byte.is_ascii_digit() => self.parse_string(),
                 _ => Err(UnexpectedByte),
             };
@@ -64,8 +65,41 @@ impl<'a> Parser<'a> {
         Err(EndOfInput)
     }
 
+    fn parse_dict_items(&mut self) -> Result<BTreeMap<&'a [u8], Value<'a>>, ParserError> {
+        let mut tree = BTreeMap::new();
+        let mut last: Option<&'a [u8]> = None;
+
+        self.pos += 1;
+        loop {
+            if self.peek()? == b'e' {
+                self.pos += 1;
+                return Ok(tree);
+            }
+            let Value::Bytes(key) = self.parse_string()? else {
+                unreachable!()
+            };
+
+            if let Some(last_key) = last
+                && last_key >= key
+            {
+                return Err(UnexpectedByte);
+            }
+            last = Some(key);
+            let value = self.parse()?;
+            tree.insert(key, value);
+        }
+    }
+
     fn parse_dict(&mut self) -> Result<Value<'a>, ParserError> {
-        Err(UnexpectedByte)
+        if self.depth >= MAX_DEPTH {
+            return Err(ParserError::DepthError);
+        }
+
+        self.depth += 1;
+        let result = self.parse_dict_items();
+
+        self.depth -= 1;
+        result.map(Value::Dict)
     }
 
     fn parse_list_items(&mut self) -> Result<Vec<Value<'a>>, ParserError> {
