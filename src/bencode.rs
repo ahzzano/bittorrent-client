@@ -4,10 +4,10 @@ use crate::bencode::Value::{Int, List};
 const MAX_DEPTH: usize = 64;
 
 #[derive(Debug, PartialEq)]
-pub enum Value {
+pub enum Value<'a> {
     Int(i64),
-    Bytes(Vec<u8>),
-    List(Vec<Value>),
+    Bytes(&'a [u8]),
+    List(Vec<Value<'a>>),
 }
 
 #[non_exhaustive]
@@ -49,7 +49,7 @@ impl<'a> Parser<'a> {
         Ok(bytes)
     }
 
-    pub fn parse(&mut self) -> Result<Value, ParserError> {
+    pub fn parse(&mut self) -> Result<Value<'a>, ParserError> {
         if let Ok(byte) = self.peek() {
             return match byte {
                 b'i' => self.parse_int(),
@@ -61,8 +61,8 @@ impl<'a> Parser<'a> {
         Err(EndOfInput)
     }
 
-    fn parse_list_items(&mut self) -> Result<Vec<Value>, ParserError> {
-        let mut items: Vec<Value> = Vec::new();
+    fn parse_list_items(&mut self) -> Result<Vec<Value<'a>>, ParserError> {
+        let mut items: Vec<Value<'a>> = Vec::new();
         loop {
             if self.peek()? == b'e' {
                 self.pos += 1;
@@ -72,7 +72,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_list(&mut self) -> Result<Value, ParserError> {
+    fn parse_list(&mut self) -> Result<Value<'a>, ParserError> {
         if self.depth >= MAX_DEPTH {
             return Err(ParserError::DepthError);
         }
@@ -84,7 +84,7 @@ impl<'a> Parser<'a> {
         result.map(List)
     }
 
-    fn parse_string(&mut self) -> Result<Value, ParserError> {
+    fn parse_string(&mut self) -> Result<Value<'a>, ParserError> {
         let mut digits: Vec<u8> = Vec::new();
 
         loop {
@@ -108,13 +108,13 @@ impl<'a> Parser<'a> {
             .map_err(|_| UnexpectedByte)?;
 
         if let Ok(bytes) = self.take(strlen) {
-            return Ok(Value::Bytes(bytes.to_vec()));
+            return Ok(Value::Bytes(bytes));
         }
 
         Err(EndOfInput)
     }
 
-    fn parse_int(&mut self) -> Result<Value, ParserError> {
+    fn parse_int(&mut self) -> Result<Value<'a>, ParserError> {
         let mut digits: Vec<u8> = Vec::new();
 
         loop {
@@ -152,7 +152,7 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
 
-    fn parse(input: &[u8]) -> Result<Value, ParserError> {
+    fn parse(input: &[u8]) -> Result<Value<'_>, ParserError> {
         Parser::new(input).parse()
     }
 
