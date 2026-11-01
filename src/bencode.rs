@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::bencode::ParserError::{EndOfInput, UnexpectedByte};
 use crate::bencode::Value::{Int, List};
 
@@ -8,6 +10,7 @@ pub enum Value<'a> {
     Int(i64),
     Bytes(&'a [u8]),
     List(Vec<Value<'a>>),
+    Dict(BTreeMap<&'a [u8], Value<'a>>),
 }
 
 #[non_exhaustive]
@@ -59,6 +62,10 @@ impl<'a> Parser<'a> {
             };
         }
         Err(EndOfInput)
+    }
+
+    fn parse_dict(&mut self) -> Result<Value<'a>, ParserError> {
+        Err(UnexpectedByte)
     }
 
     fn parse_list_items(&mut self) -> Result<Vec<Value<'a>>, ParserError> {
