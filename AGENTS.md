@@ -25,3 +25,5 @@ GitHub Repo: https://github.com/ahzzano/bittorrent-client/
     This rule only applies to code (.rs files), project files (Cargo.toml, rustfmt.toml, .gitignore, .github/), and agent related files (AGENTS.md). 
 
     Skip this check if the file change are lock files (Cargo.lock)
+
+- When writing PRs, always use the PR template
