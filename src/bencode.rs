@@ -1,7 +1,5 @@
-use crate::bencode::{
-    ParserError::{EndOfInput, UnexpectedByte},
-    Value::Int,
-};
+use crate::bencode::ParserError::{EndOfInput, UnexpectedByte};
+use crate::bencode::Value::Int;
 
 pub enum Value {
     Int(i64),
