@@ -52,7 +52,10 @@ impl<'a> Parser<'a> {
 
             if let Ok(byte) = char {
                 match byte {
-                    b'e' => break,
+                    b'e' => {
+                        self.pos += 1;
+                        break;
+                    }
                     b'-' if digits.is_empty() => digits.push(byte),
                     b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' => {
                         digits.push(byte)
@@ -163,5 +166,13 @@ mod tests {
     #[test]
     fn rejects_overflow() {
         assert!(parse(b"i9223372036854775808e").is_err());
+    }
+
+    #[test]
+    fn parses_consecutive_ints() {
+        let mut parser = Parser::new(b"i1ei2e");
+        assert!(matches!(parser.parse(), Ok(Int(1))));
+        assert!(matches!(parser.parse(), Ok(Int(2))));
+        assert!(matches!(parser.parse(), Err(EndOfInput)));
     }
 }
