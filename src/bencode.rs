@@ -1,6 +1,7 @@
 use crate::bencode::ParserError::{EndOfInput, UnexpectedByte};
 use crate::bencode::Value::Int;
 
+#[derive(Debug, PartialEq)]
 pub enum Value {
     Int(i64),
     Bytes(Vec<u8>),
