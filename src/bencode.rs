@@ -452,4 +452,146 @@ mod tests {
         assert!(matches!(parser.parse(), Err(ParserError::DepthError)));
         assert_eq!(parser.depth, 0);
     }
+
+    fn dict<'a>(pairs: Vec<(&'a [u8], Value<'a>)>) -> Value<'a> {
+        Value::Dict(pairs.into_iter().collect())
+    }
+
+    fn nested_dict(depth: usize) -> Vec<u8> {
+        let opens = "d1:k".repeat(depth - 1);
+        let closes = "e".repeat(depth - 1);
+        [opens, "de".to_string(), closes].concat().into_bytes()
+    }
+
+    #[test]
+    fn parses_empty_dict() {
+        assert_eq!(parse(b"de"), Ok(dict(vec![])));
+    }
+
+    #[test]
+    fn parses_single_pair_dict() {
+        assert_eq!(
+            parse(b"d3:cow3:mooe"),
+            Ok(dict(vec![(b"cow", Value::Bytes(b"moo"))]))
+        );
+    }
+
+    #[test]
+    fn parses_mixed_value_dict() {
+        assert_eq!(
+            parse(b"d1:ai1e1:b4:spam1:cli2eee"),
+            Ok(dict(vec![
+                (b"a", Int(1)),
+                (b"b", Value::Bytes(b"spam")),
+                (b"c", List(vec![Int(2)])),
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_dict_in_list() {
+        assert_eq!(
+            parse(b"ld1:ai1eee"),
+            Ok(List(vec![dict(vec![(b"a", Int(1))])]))
+        );
+    }
+
+    #[test]
+    fn parses_nested_dict() {
+        assert_eq!(
+            parse(b"d4:infod6:lengthi7eee"),
+            Ok(dict(vec![(b"info", dict(vec![(b"length", Int(7))]))]))
+        );
+    }
+
+    #[test]
+    fn parses_empty_key() {
+        assert_eq!(parse(b"d0:i1ee"), Ok(dict(vec![(b"", Int(1))])));
+    }
+
+    #[test]
+    fn parses_binary_key() {
+        assert_eq!(
+            parse(b"d2:\xff\x00i1ee"),
+            Ok(dict(vec![(b"\xff\x00", Int(1))]))
+        );
+    }
+
+    #[test]
+    fn sorts_keys_by_raw_bytes() {
+        // 'Z' (0x5a) sorts before 'a' (0x61), and a prefix sorts before its extension.
+        assert!(parse(b"d1:Zi1e1:ai2e2:abi3ee").is_ok());
+    }
+
+    #[test]
+    fn parses_consecutive_dicts() {
+        let mut parser = Parser::new(b"dede");
+        assert_eq!(parser.parse(), Ok(dict(vec![])));
+        assert_eq!(parser.parse(), Ok(dict(vec![])));
+        assert!(matches!(parser.parse(), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn rejects_unsorted_keys() {
+        assert!(matches!(parse(b"d1:bi1e1:ai2ee"), Err(UnexpectedByte)));
+        assert!(matches!(parse(b"d1:ai1e1:Zi2ee"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_duplicate_keys() {
+        assert!(matches!(parse(b"d1:ai1e1:ai2ee"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_non_string_keys() {
+        assert!(matches!(parse(b"di1ei2ee"), Err(UnexpectedByte)));
+        assert!(matches!(parse(b"dlei1ee"), Err(UnexpectedByte)));
+        assert!(matches!(parse(b"ddei1ee"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_missing_value() {
+        assert!(matches!(parse(b"d3:fooe"), Err(UnexpectedByte)));
+    }
+
+    #[test]
+    fn rejects_unterminated_dict() {
+        assert!(matches!(parse(b"d"), Err(EndOfInput)));
+        assert!(matches!(parse(b"d3:foo"), Err(EndOfInput)));
+        assert!(matches!(parse(b"d3:fooi1e"), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn parses_dict_at_max_depth() {
+        assert!(parse(&nested_dict(MAX_DEPTH)).is_ok());
+    }
+
+    #[test]
+    fn rejects_dict_past_max_depth() {
+        assert!(matches!(
+            parse(&nested_dict(MAX_DEPTH + 1)),
+            Err(ParserError::DepthError)
+        ));
+    }
+
+    #[test]
+    fn rejects_mixed_nesting_bomb() {
+        let input = "ld1:k".repeat(50_000);
+        assert!(matches!(
+            parse(input.as_bytes()),
+            Err(ParserError::DepthError)
+        ));
+    }
+
+    #[test]
+    fn restores_depth_after_dict_error() {
+        let mut parser = Parser::new(b"d1:kd1:bi1e1:ai2eee");
+        assert!(parser.parse().is_err());
+        assert_eq!(parser.depth, 0);
+
+        let bomb = nested_dict(MAX_DEPTH + 1);
+        let mut parser = Parser::new(&bomb);
+        assert!(matches!(parser.parse(), Err(ParserError::DepthError)));
+        assert_eq!(parser.depth, 0);
+    }
 }
