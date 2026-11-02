@@ -13,6 +13,46 @@ pub enum Value<'a> {
     Dict(BTreeMap<&'a [u8], Value<'a>>),
 }
 
+impl<'a> Value<'a> {
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Self::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn as_bytes(&self) -> Option<&'a [u8]> {
+        match self {
+            Self::Bytes(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// Returns `None` if the value is not a byte string or is not valid UTF-8.
+    pub fn as_str(&self) -> Option<&'a str> {
+        str::from_utf8(self.as_bytes()?).ok()
+    }
+
+    pub fn as_list(&self) -> Option<&[Value<'a>]> {
+        match self {
+            Self::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    pub fn as_dict(&self) -> Option<&BTreeMap<&'a [u8], Value<'a>>> {
+        match self {
+            Self::Dict(map) => Some(map),
+            _ => None,
+        }
+    }
+
+    /// Looks up `key` if this value is a dict.
+    pub fn get(&self, key: &[u8]) -> Option<&Value<'a>> {
+        self.as_dict()?.get(key)
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, PartialEq)]
 pub enum ParserError {
@@ -559,6 +599,25 @@ mod tests {
         assert!(matches!(parse(b"d"), Err(EndOfInput)));
         assert!(matches!(parse(b"d3:foo"), Err(EndOfInput)));
         assert!(matches!(parse(b"d3:fooi1e"), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn accessors_extract_matching_variants() {
+        let v = parse(b"d1:ai1e1:b4:spam1:cli2ee1:d2:\xff\xffe").unwrap();
+        assert_eq!(v.get(b"a").and_then(Value::as_int), Some(1));
+        assert_eq!(v.get(b"b").and_then(Value::as_str), Some("spam"));
+        assert_eq!(
+            v.get(b"c").and_then(Value::as_list).map(<[_]>::len),
+            Some(1)
+        );
+        assert_eq!(
+            v.get(b"d").and_then(Value::as_bytes),
+            Some(&b"\xff\xff"[..])
+        );
+        assert_eq!(v.get(b"d").and_then(Value::as_str), None);
+        assert_eq!(v.get(b"missing"), None);
+        assert_eq!(v.get(b"a").and_then(Value::as_str), None);
+        assert_eq!(Int(1).get(b"a"), None);
     }
 
     #[test]
