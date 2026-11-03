@@ -1,7 +1,7 @@
-use crate::{
-    bencode::{self, Value},
-    metainfo::MetainfoError::{InvalidFieldType, InvalidShape, MissingField, ParserError},
-};
+use sha1::{Digest, Sha1};
+
+use crate::bencode::{self, Value};
+use crate::metainfo::MetainfoError::{InvalidFieldType, InvalidShape, MissingField, ParserError};
 
 /// Contents of a .torrent (metainfo) file, as defined by BEP 3.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,10 +176,6 @@ impl Info {
             files,
         })
     }
-
-    pub fn hash(&self) -> [u8; 20] {
-        [0; 20]
-    }
 }
 
 impl Metainfo {
@@ -193,24 +189,17 @@ impl Metainfo {
 
         let announce = req_str(&result, "announce")?.to_string();
 
-        let info = field(&result, "info")?;
-        if info.as_dict().is_none() {
-            return Err(InvalidFieldType("info".to_string()));
-        }
-
-        let info = {
-            let this = Info::new(info);
-            match this {
-                Ok(t) => t,
-                Err(e) => return Err(InvalidShape),
-            }
-        };
-
-        let info_hash = info.hash();
+        let info_value = field(&result, "info")?;
+        let raw_info = info_value
+            .raw_dict()
+            .ok_or_else(|| InvalidFieldType("info".to_string()))?;
+        let info = Info::new(info_value)?;
+        // BEP 3: hash the info dict exactly as encoded in the file, never a re-encoding.
+        let info_hash: [u8; 20] = Sha1::digest(raw_info).into();
 
         // Get non list keys
         Ok(Metainfo {
-            announce: announce,
+            announce,
             announce_list: None,
             creation_date: None,
             comment: None,
@@ -305,6 +294,29 @@ mod tests {
         assert!(matches!(info(input), Err(InvalidFieldType(k)) if k == "path"));
         let input = b"d6:lengthi5e4:name2:..12:piece lengthi16e6:pieces0:e";
         assert!(matches!(info(input), Err(InvalidFieldType(k)) if k == "name"));
+    }
+
+    #[test]
+    fn computes_info_hash_from_raw_bytes() {
+        let input = b"d8:announce3:url4:infod6:lengthi5e4:name1:a12:piece lengthi16e6:pieces0:ee";
+        let Ok(meta) = Metainfo::from_bytes(input) else {
+            panic!("expected valid metainfo");
+        };
+        // Expected value from `shasum -a 1` over the info dict bytes.
+        let expected = [
+            0x40, 0x6a, 0xca, 0x73, 0xf8, 0x10, 0xa6, 0xf9, 0xf2, 0x86, 0x44, 0xb0, 0xfa, 0x4b,
+            0x17, 0xd0, 0x2b, 0xa2, 0xd2, 0x96,
+        ];
+        assert_eq!(meta.info_hash, expected);
+    }
+
+    #[test]
+    fn from_bytes_propagates_info_errors() {
+        let input = b"d8:announce3:url4:infod6:lengthi5e12:piece lengthi16e6:pieces0:ee";
+        assert!(matches!(
+            Metainfo::from_bytes(input),
+            Err(MissingField(k)) if k == "name"
+        ));
     }
 
     #[test]
