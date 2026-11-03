@@ -5,12 +5,27 @@ use crate::bencode::Value::{Int, List};
 
 const MAX_DEPTH: usize = 64;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Value<'a> {
     Int(i64),
     Bytes(&'a [u8]),
     List(Vec<Value<'a>>),
-    Dict(BTreeMap<&'a [u8], Value<'a>>),
+    /// Entries plus the exact encoded bytes (`d...e`) as they appeared in the input.
+    /// Only parser-produced dicts carry valid raw bytes; a hand-built dict's raw is meaningless.
+    Dict(BTreeMap<&'a [u8], Value<'a>>, &'a [u8]),
+}
+
+/// Compares decoded content only; the raw source bytes of dicts are ignored.
+impl PartialEq for Value<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Bytes(a), Self::Bytes(b)) => a == b,
+            (Self::List(a), Self::List(b)) => a == b,
+            (Self::Dict(a, _), Self::Dict(b, _)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl<'a> Value<'a> {
@@ -42,7 +57,15 @@ impl<'a> Value<'a> {
 
     pub fn as_dict(&self) -> Option<&BTreeMap<&'a [u8], Value<'a>>> {
         match self {
-            Self::Dict(map) => Some(map),
+            Self::Dict(map, _) => Some(map),
+            _ => None,
+        }
+    }
+
+    /// Original encoded bytes of a dict; `None` for other variants.
+    pub fn raw_dict(&self) -> Option<&'a [u8]> {
+        match self {
+            Self::Dict(_, raw) => Some(raw),
             _ => None,
         }
     }
@@ -135,11 +158,12 @@ impl<'a> Parser<'a> {
             return Err(ParserError::DepthError);
         }
 
+        let start = self.pos;
         self.depth += 1;
         let result = self.parse_dict_items();
 
         self.depth -= 1;
-        result.map(Value::Dict)
+        result.map(|map| Value::Dict(map, &self.buf[start..self.pos]))
     }
 
     fn parse_list_items(&mut self) -> Result<Vec<Value<'a>>, ParserError> {
@@ -482,6 +506,25 @@ mod tests {
     }
 
     #[test]
+    fn raw_dict_preserves_source_bytes() {
+        let input = b"d4:infod6:lengthi7eee";
+        let value = parse(input).expect("valid bencode");
+        assert_eq!(value.raw_dict(), Some(&input[..]));
+        assert_eq!(
+            value.get(b"info").and_then(Value::raw_dict),
+            Some(&b"d6:lengthi7ee"[..])
+        );
+        let list = parse(b"ld1:ai1eee").expect("valid bencode");
+        assert_eq!(
+            list.as_list().and_then(|l| l[0].raw_dict()),
+            Some(&b"d1:ai1ee"[..])
+        );
+        for other in [&b"i1e"[..], b"1:a", b"le"] {
+            assert_eq!(parse(other).expect("valid bencode").raw_dict(), None);
+        }
+    }
+
+    #[test]
     fn restores_depth_after_error() {
         let mut parser = Parser::new(b"llxee");
         assert!(parser.parse().is_err());
@@ -494,7 +537,7 @@ mod tests {
     }
 
     fn dict<'a>(pairs: Vec<(&'a [u8], Value<'a>)>) -> Value<'a> {
-        Value::Dict(pairs.into_iter().collect())
+        Value::Dict(pairs.into_iter().collect(), b"")
     }
 
     fn nested_dict(depth: usize) -> Vec<u8> {
