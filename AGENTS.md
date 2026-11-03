@@ -5,6 +5,7 @@ GitHub Repo: https://github.com/ahzzano/bittorrent-client/
 # Structure
 ## Modules
 - `bencode.rs` - Bencode parser
+- `metainfo.rs` - Constructs related to .torrent file loading
 
 ## Implementation
 - `lib.rs` - Library code. Used to export modules to the main binaries

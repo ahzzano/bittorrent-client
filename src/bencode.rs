@@ -5,12 +5,75 @@ use crate::bencode::Value::{Int, List};
 
 const MAX_DEPTH: usize = 64;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Value<'a> {
     Int(i64),
     Bytes(&'a [u8]),
     List(Vec<Value<'a>>),
-    Dict(BTreeMap<&'a [u8], Value<'a>>),
+    /// Entries plus the exact encoded bytes (`d...e`) as they appeared in the input.
+    /// Only parser-produced dicts carry valid raw bytes; a hand-built dict's raw is meaningless.
+    Dict(BTreeMap<&'a [u8], Value<'a>>, &'a [u8]),
+}
+
+/// Compares decoded content only; the raw source bytes of dicts are ignored.
+impl PartialEq for Value<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Bytes(a), Self::Bytes(b)) => a == b,
+            (Self::List(a), Self::List(b)) => a == b,
+            (Self::Dict(a, _), Self::Dict(b, _)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl<'a> Value<'a> {
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Self::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn as_bytes(&self) -> Option<&'a [u8]> {
+        match self {
+            Self::Bytes(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// Returns `None` if the value is not a byte string or is not valid UTF-8.
+    pub fn as_str(&self) -> Option<&'a str> {
+        str::from_utf8(self.as_bytes()?).ok()
+    }
+
+    pub fn as_list(&self) -> Option<&[Value<'a>]> {
+        match self {
+            Self::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    pub fn as_dict(&self) -> Option<&BTreeMap<&'a [u8], Value<'a>>> {
+        match self {
+            Self::Dict(map, _) => Some(map),
+            _ => None,
+        }
+    }
+
+    /// Original encoded bytes of a dict; `None` for other variants.
+    pub fn raw_dict(&self) -> Option<&'a [u8]> {
+        match self {
+            Self::Dict(_, raw) => Some(raw),
+            _ => None,
+        }
+    }
+
+    /// Looks up `key` if this value is a dict.
+    pub fn get(&self, key: &[u8]) -> Option<&Value<'a>> {
+        self.as_dict()?.get(key)
+    }
 }
 
 #[non_exhaustive]
@@ -95,11 +158,12 @@ impl<'a> Parser<'a> {
             return Err(ParserError::DepthError);
         }
 
+        let start = self.pos;
         self.depth += 1;
         let result = self.parse_dict_items();
 
         self.depth -= 1;
-        result.map(Value::Dict)
+        result.map(|map| Value::Dict(map, &self.buf[start..self.pos]))
     }
 
     fn parse_list_items(&mut self) -> Result<Vec<Value<'a>>, ParserError> {
@@ -442,6 +506,25 @@ mod tests {
     }
 
     #[test]
+    fn raw_dict_preserves_source_bytes() {
+        let input = b"d4:infod6:lengthi7eee";
+        let value = parse(input).expect("valid bencode");
+        assert_eq!(value.raw_dict(), Some(&input[..]));
+        assert_eq!(
+            value.get(b"info").and_then(Value::raw_dict),
+            Some(&b"d6:lengthi7ee"[..])
+        );
+        let list = parse(b"ld1:ai1eee").expect("valid bencode");
+        assert_eq!(
+            list.as_list().and_then(|l| l[0].raw_dict()),
+            Some(&b"d1:ai1ee"[..])
+        );
+        for other in [&b"i1e"[..], b"1:a", b"le"] {
+            assert_eq!(parse(other).expect("valid bencode").raw_dict(), None);
+        }
+    }
+
+    #[test]
     fn restores_depth_after_error() {
         let mut parser = Parser::new(b"llxee");
         assert!(parser.parse().is_err());
@@ -454,7 +537,7 @@ mod tests {
     }
 
     fn dict<'a>(pairs: Vec<(&'a [u8], Value<'a>)>) -> Value<'a> {
-        Value::Dict(pairs.into_iter().collect())
+        Value::Dict(pairs.into_iter().collect(), b"")
     }
 
     fn nested_dict(depth: usize) -> Vec<u8> {
@@ -559,6 +642,25 @@ mod tests {
         assert!(matches!(parse(b"d"), Err(EndOfInput)));
         assert!(matches!(parse(b"d3:foo"), Err(EndOfInput)));
         assert!(matches!(parse(b"d3:fooi1e"), Err(EndOfInput)));
+    }
+
+    #[test]
+    fn accessors_extract_matching_variants() {
+        let v = parse(b"d1:ai1e1:b4:spam1:cli2ee1:d2:\xff\xffe").unwrap();
+        assert_eq!(v.get(b"a").and_then(Value::as_int), Some(1));
+        assert_eq!(v.get(b"b").and_then(Value::as_str), Some("spam"));
+        assert_eq!(
+            v.get(b"c").and_then(Value::as_list).map(<[_]>::len),
+            Some(1)
+        );
+        assert_eq!(
+            v.get(b"d").and_then(Value::as_bytes),
+            Some(&b"\xff\xff"[..])
+        );
+        assert_eq!(v.get(b"d").and_then(Value::as_str), None);
+        assert_eq!(v.get(b"missing"), None);
+        assert_eq!(v.get(b"a").and_then(Value::as_str), None);
+        assert_eq!(Int(1).get(b"a"), None);
     }
 
     #[test]
