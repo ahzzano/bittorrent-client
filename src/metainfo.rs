@@ -58,12 +58,34 @@ pub struct FileEntry {
     pub path: Vec<String>,
 }
 
+#[derive(Debug)]
 pub enum MetainfoError {
     IOError(std::io::Error),
     ParserError(bencode::ParserError),
     InvalidShape,
     MissingField(String),
     InvalidFieldType(String),
+}
+
+impl std::fmt::Display for MetainfoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MetainfoError::IOError(e) => write!(f, "io error: {e}"),
+            MetainfoError::ParserError(e) => write!(f, "bencode parse error: {e:?}"),
+            MetainfoError::InvalidShape => write!(f, "invalid torrent shape"),
+            MetainfoError::MissingField(k) => write!(f, "missing field: {k}"),
+            MetainfoError::InvalidFieldType(k) => write!(f, "invalid field type: {k}"),
+        }
+    }
+}
+
+impl std::error::Error for MetainfoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            MetainfoError::IOError(e) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 fn field<'v, 'a>(dict: &'v Value<'a>, key: &str) -> Result<&'v Value<'a>, MetainfoError> {
@@ -91,6 +113,41 @@ fn req_list<'v, 'a>(dict: &'v Value<'a>, key: &str) -> Result<&'v [Value<'a>], M
     field(dict, key)?
         .as_list()
         .ok_or_else(|| InvalidFieldType(key.to_string()))
+}
+
+fn opt_str(dict: &Value<'_>, key: &str) -> Result<Option<String>, MetainfoError> {
+    dict.get(key.as_bytes()).map_or(Ok(None), |v| {
+        v.as_str()
+            .map(|s| Some(s.to_string()))
+            .ok_or_else(|| InvalidFieldType(key.to_string()))
+    })
+}
+
+fn opt_int(dict: &Value<'_>, key: &str) -> Result<Option<i64>, MetainfoError> {
+    dict.get(key.as_bytes()).map_or(Ok(None), |v| {
+        v.as_int()
+            .map(Some)
+            .ok_or_else(|| InvalidFieldType(key.to_string()))
+    })
+}
+
+fn opt_announce_list(dict: &Value<'_>) -> Result<Option<Vec<Vec<String>>>, MetainfoError> {
+    let bad = || InvalidFieldType("announce-list".to_string());
+    let Some(v) = dict.get(b"announce-list") else {
+        return Ok(None);
+    };
+    let tiers = v.as_list().ok_or_else(bad)?;
+    tiers
+        .iter()
+        .map(|tier| {
+            tier.as_list()
+                .ok_or_else(bad)?
+                .iter()
+                .map(|u| u.as_str().map(str::to_string).ok_or_else(bad))
+                .collect()
+        })
+        .collect::<Result<_, _>>()
+        .map(Some)
 }
 
 /// Path components that refer to the current or parent directory, or to nothing at all.
@@ -197,13 +254,12 @@ impl Metainfo {
         // BEP 3: hash the info dict exactly as encoded in the file, never a re-encoding.
         let info_hash: [u8; 20] = Sha1::digest(raw_info).into();
 
-        // Get non list keys
         Ok(Metainfo {
             announce,
-            announce_list: None,
-            creation_date: None,
-            comment: None,
-            created_by: None,
+            announce_list: opt_announce_list(&result)?,
+            creation_date: opt_int(&result, "creation date")?,
+            comment: opt_str(&result, "comment")?,
+            created_by: opt_str(&result, "created by")?,
             info,
             info_hash,
         })
@@ -323,5 +379,47 @@ mod tests {
     fn rejects_missing_name() {
         let input = b"d6:lengthi5e12:piece lengthi16e6:pieces0:e";
         assert!(matches!(info(input), Err(MissingField(k)) if k == "name"));
+    }
+
+    #[test]
+    fn parses_optional_top_level_fields() {
+        let input = b"d8:announce3:url13:announce-listll3:urlee7:comment2:hi10:created by1:x13:creation datei5e4:infod6:lengthi5e4:name1:a12:piece lengthi16e6:pieces0:ee";
+        let Ok(meta) = Metainfo::from_bytes(input) else {
+            panic!("expected valid metainfo");
+        };
+        assert_eq!(meta.announce_list, Some(vec![vec!["url".to_string()]]));
+        assert_eq!(meta.creation_date, Some(5));
+        assert_eq!(meta.comment, Some("hi".to_string()));
+        assert_eq!(meta.created_by, Some("x".to_string()));
+    }
+
+    #[test]
+    fn optional_fields_default_to_none() {
+        let input = b"d8:announce3:url4:infod6:lengthi5e4:name1:a12:piece lengthi16e6:pieces0:ee";
+        let Ok(meta) = Metainfo::from_bytes(input) else {
+            panic!("expected valid metainfo");
+        };
+        assert_eq!(meta.announce_list, None);
+        assert_eq!(meta.creation_date, None);
+        assert_eq!(meta.comment, None);
+        assert_eq!(meta.created_by, None);
+    }
+
+    #[test]
+    fn rejects_wrong_type_optional_field() {
+        let input = b"d8:announce3:url7:commenti1e4:infod6:lengthi5e4:name1:a12:piece lengthi16e6:pieces0:ee";
+        assert!(matches!(
+            Metainfo::from_bytes(input),
+            Err(InvalidFieldType(k)) if k == "comment"
+        ));
+    }
+
+    #[test]
+    fn metainfo_error_display() {
+        assert_eq!(
+            MissingField("name".to_string()).to_string(),
+            "missing field: name"
+        );
+        assert_eq!(InvalidShape.to_string(), "invalid torrent shape");
     }
 }
